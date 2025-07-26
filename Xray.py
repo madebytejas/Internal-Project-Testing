@@ -5,6 +5,9 @@ A production-ready, modular feature extraction system designed for medical imagi
 applications, specifically chest X-ray analysis. Supports ResNet50 backbone with
 extensibility for other CNN architectures.
 
+Author: AI Solutions Architect
+Version: 1.0.2
+License: MIT
 """
 
 import logging
@@ -21,18 +24,14 @@ import torchvision.transforms as transforms
 import torchvision.models as models
 from PIL import Image
 
-# Configure logging
+# Configure logging and suppress warnings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Suppress unnecessary warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
 
 
 class MedicalImageDataset(Dataset):
-    """
-    Custom dataset for medical images with preprocessing capabilities.
-    """
+    """Handles loading and preprocessing of medical images in various formats."""
     
     def __init__(self, images: Union[List[str], List[np.ndarray], List[torch.Tensor]], 
                  transform: Optional[transforms.Compose] = None):
@@ -43,6 +42,7 @@ class MedicalImageDataset(Dataset):
         return len(self.images)
     
     def __getitem__(self, idx: int) -> torch.Tensor:
+        """Main method to get and preprocess an image by index"""
         image = self.images[idx]
         try:
             tensor_image = self._process_image(image)
@@ -53,8 +53,9 @@ class MedicalImageDataset(Dataset):
             logger.error(f"Error processing image at index {idx}: {str(e)}")
             raise IOError(f"Failed to process image at index {idx}: {str(e)}")
 
+    # Helper methods for different image types
     def _process_image(self, image: Union[str, np.ndarray, torch.Tensor]) -> torch.Tensor:
-        """Process different image types into tensor"""
+        """Router method to handle different input types"""
         if isinstance(image, str):
             return self._load_image_file(image)
         elif isinstance(image, np.ndarray):
@@ -65,39 +66,39 @@ class MedicalImageDataset(Dataset):
             raise ValueError(f"Unsupported image type: {type(image)}")
 
     def _load_image_file(self, image_path: str) -> torch.Tensor:
-        """Load image from file path"""
+        """Load from file path using PIL and convert to tensor"""
         pil_image = Image.open(image_path).convert('RGB')
         return transforms.ToTensor()(pil_image)
 
     def _process_numpy_array(self, image: np.ndarray) -> torch.Tensor:
-        """Convert numpy array to tensor"""
-        if image.ndim == 2:
+        """Convert numpy array to properly formatted tensor"""
+        if image.ndim == 2:  # Handle grayscale
             image = np.stack([image] * 3, axis=-1)
-        elif image.ndim == 3 and image.shape[-1] == 1:
+        elif image.ndim == 3 and image.shape[-1] == 1:  # Handle single channel
             image = np.repeat(image, 3, axis=-1)
         return torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
 
     def _process_torch_tensor(self, image: torch.Tensor) -> torch.Tensor:
-        """Process torch tensor into correct format"""
-        if image.dim() == 2:
+        """Ensure tensor is in correct format (C,H,W) and normalized"""
+        if image.dim() == 2:  # Grayscale
             tensor_image = image.unsqueeze(0).repeat(3, 1, 1)
         elif image.dim() == 3:
-            if image.size(0) == 1:
+            if image.size(0) == 1:  # Single channel
                 tensor_image = image.repeat(3, 1, 1)
-            elif image.size(2) == 3:
+            elif image.size(2) == 3:  # Channels-last
                 tensor_image = image.permute(2, 0, 1)
             else:
                 tensor_image = image
         else:
             tensor_image = image
             
-        if tensor_image.max() > 1.0:
+        if tensor_image.max() > 1.0:  # Normalize if needed
             tensor_image = tensor_image / 255.0
         return tensor_image
 
 
 class FeatureExtractorConfig:
-    """Configuration class for the feature extractor."""
+    """Stores all configuration parameters for the feature extractor."""
     
     def __init__(self, 
                  model_name: str = 'resnet50',
@@ -117,29 +118,34 @@ class FeatureExtractorConfig:
 
 
 class MedicalImageFeatureExtractor(nn.Module):
-    """Production-ready medical image feature extractor."""
+    """Core feature extraction model with configurable backbone."""
     
     def __init__(self, config: FeatureExtractorConfig):
         super(MedicalImageFeatureExtractor, self).__init__()
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Initialize model components
         self.backbone = self._create_backbone()
         self.feature_projector = self._create_feature_projector()
         self.preprocess = self._create_preprocessing_pipeline()
-        self.to(self.device)
+        
+        self.to(self.device)  # Move to appropriate device
         
     def _create_backbone(self) -> nn.Module:
+        """Initialize the CNN backbone based on config"""
         if self.config.model_name.lower() == 'resnet50':
             model = models.resnet50(pretrained=self.config.pretrained)
-            return nn.Sequential(*list(model.children())[:-1])
+            return nn.Sequential(*list(model.children())[:-1])  # Remove classification head
         elif self.config.model_name.lower() == 'densenet121':
             model = models.densenet121(pretrained=self.config.pretrained)
-            model.classifier = nn.Identity()
+            model.classifier = nn.Identity()  # Replace classifier
             return model
         else:
             raise ValueError(f"Unsupported model: {self.config.model_name}")
 
     def _create_feature_projector(self) -> nn.Sequential:
+        """Create MLP to project features to desired dimension"""
         backbone_out = self._get_backbone_output_dim()
         return nn.Sequential(
             nn.Linear(backbone_out, self.config.feature_dim * 2),
@@ -151,42 +157,49 @@ class MedicalImageFeatureExtractor(nn.Module):
         )
 
     def _get_backbone_output_dim(self) -> int:
+        """Dynamically determine backbone output dimension"""
         dummy = torch.randn(1, 3, *self.config.input_size)
         with torch.no_grad():
             output = self.backbone(dummy)
             return output.view(output.size(0), -1).size(1)
 
     def _create_preprocessing_pipeline(self) -> transforms.Compose:
+        """Standard ImageNet normalization pipeline"""
         return transforms.Compose([
             transforms.Resize(self.config.input_size),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Main forward pass through the network"""
         features = self.backbone(x)
-        features = features.view(features.size(0), -1)
+        features = features.view(features.size(0), -1)  # Flatten
         features = self.feature_projector(features)
         if self.config.normalize_features:
-            features = F.normalize(features, p=2, dim=1)
+            features = F.normalize(features, p=2, dim=1)  # L2 normalization
         return features
 
     def extract_features_batch(self, images: List[torch.Tensor], batch_size: int = None) -> torch.Tensor:
+        """Process multiple images efficiently in batches"""
         batch_size = batch_size or self.config.batch_size
         dataset = MedicalImageDataset(images, transform=self.preprocess)
+        # Create dataloader with specified number of workers for parallel data loading
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
-        self.eval()
+        self.eval()  # Switch to evaluation mode
         with torch.no_grad():
             features = torch.cat([self(batch.to(self.device)).cpu() for batch in dataloader])
         return features
 
     def extract_features_single(self, image: torch.Tensor) -> torch.Tensor:
+        """Convenience method for single image processing"""
         dataset = MedicalImageDataset([image], transform=self.preprocess)
         self.eval()
         with torch.no_grad():
             return self(dataset[0].unsqueeze(0).to(self.device)).cpu()
 
     def save_model(self, filepath: Union[str, Path]) -> None:
+        """Save model state and configuration to file"""
         torch.save({
             'model_state_dict': self.state_dict(),
             'config': self.config.__dict__
@@ -194,16 +207,18 @@ class MedicalImageFeatureExtractor(nn.Module):
 
     @classmethod
     def load_model(cls, filepath: Union[str, Path], device: str = None) -> 'MedicalImageFeatureExtractor':
+        """Load model from file with safety checks"""
         checkpoint = torch.load(filepath, map_location='cpu', weights_only=True)
         config = FeatureExtractorConfig(**checkpoint['config'])
         model = cls(config)
         model.load_state_dict(checkpoint['model_state_dict'])
-        if device:
+        if device:  # Optional device override
             model.device = torch.device(device)
             model.to(model.device)
         return model
 
     def get_model_info(self) -> Dict[str, Any]:
+        """Return important model metadata"""
         total_params = sum(p.numel() for p in self.parameters())
         return {
             'model_name': self.config.model_name,
@@ -218,6 +233,7 @@ def create_feature_extractor(model_name: str = 'resnet50',
                            feature_dim: int = 2048,
                            pretrained: bool = True,
                            **kwargs) -> MedicalImageFeatureExtractor:
+    """Factory function for easy model creation"""
     config = FeatureExtractorConfig(
         model_name=model_name,
         feature_dim=feature_dim,
@@ -228,6 +244,7 @@ def create_feature_extractor(model_name: str = 'resnet50',
 
 
 if __name__ == "__main__":
+    """Example usage with demonstration of all key features"""
     print("=== Medical Image Feature Extractor ===")
     
     # Initialize extractor
