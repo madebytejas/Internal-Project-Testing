@@ -5,9 +5,6 @@ A production-ready, modular feature extraction system designed for medical imagi
 applications, specifically chest X-ray analysis. Supports ResNet50 backbone with
 extensibility for other CNN architectures.
 
-Author: AI Solutions Architect
-Version: 1.0.2
-License: MIT
 """
 
 import logging
